@@ -56,7 +56,7 @@ class PlaywrightMCPBackend(ContextBackend):
         self.browser = browser
         # Explicit user_agent takes precedence, then platform-based if requested
         if user_agent:
-            self.user_agent = user_agent
+            self.user_agent: str | None = user_agent
         elif use_platform_user_agent:
             self.user_agent = _get_platform_user_agent()
         else:

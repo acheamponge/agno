@@ -1,3 +1,18 @@
+"""
+BrowserbaseTools — cloud browser automation via Browserbase.
+
+Setup:
+1. Install: `pip install browserbase playwright && playwright install`
+2. Set env vars:
+   - BROWSERBASE_API_KEY: Your Browserbase API key
+   - BROWSERBASE_PROJECT_ID: Your Browserbase project ID
+
+Credentials:
+- Sign up at https://browserbase.com
+- Create a project and get your API key from the dashboard
+- Copy the Project ID from project settings
+"""
+
 import json
 import re
 from os import getenv
@@ -10,6 +25,29 @@ try:
     from browserbase import Browserbase
 except ImportError:
     raise ImportError("`browserbase` not installed. Please install using `pip install browserbase`")
+
+
+BROWSERBASE_INSTRUCTIONS = """
+## BrowserbaseTools Usage
+
+You have access to a cloud browser for web automation. Key tools:
+
+- `navigate_to(url)`: Go to a URL
+- `get_page_content()`: Get the current page content
+- `click(selector)`: Click an element by CSS selector
+- `type_text(selector, text)`: Type into an input field
+- `fill_form({selector: value, ...})`: Fill multiple form fields
+- `screenshot(path)`: Save a screenshot
+- `wait_for_selector(selector)`: Wait for an element to appear
+
+CSS Selector Examples:
+- `#login-button` — element with id="login-button"
+- `.submit-btn` — element with class="submit-btn"
+- `input[name="email"]` — input with name="email"
+- `button[type="submit"]` — submit button
+
+The browser session persists between calls. Always close when done.
+"""
 
 
 class BrowserbaseTools(Toolkit):
@@ -137,7 +175,13 @@ class BrowserbaseTools(Toolkit):
             tools.append(self.get_session_recording)
             async_tools.append((self.aget_session_recording, "get_session_recording"))
 
-        super().__init__(name="browserbase_tools", tools=tools, async_tools=async_tools, **kwargs)
+        super().__init__(
+            name="browserbase_tools",
+            tools=tools,
+            async_tools=async_tools,
+            instructions=BROWSERBASE_INSTRUCTIONS,
+            **kwargs,
+        )
 
     def _ensure_session(self):
         """Ensures a session exists, creating one if needed."""
@@ -221,11 +265,11 @@ class BrowserbaseTools(Toolkit):
             self._initialize_browser(connect_url)
             if self._page:
                 self._page.goto(url, wait_until="networkidle")
-            result = {"status": "complete", "title": self._page.title() if self._page else "", "url": url}
+            result = {"status": "success", "title": self._page.title() if self._page else "", "url": url}
             return json.dumps(result)
         except Exception as e:
             self._cleanup()
-            raise e
+            return json.dumps({"status": "error", "message": str(e), "url": url})
 
     def screenshot(self, path: str, full_page: bool = True, connect_url: Optional[str] = None) -> str:
         """Takes a screenshot of the current page.
@@ -245,7 +289,7 @@ class BrowserbaseTools(Toolkit):
             return json.dumps({"status": "success", "path": path})
         except Exception as e:
             self._cleanup()
-            raise e
+            return json.dumps({"status": "error", "message": str(e), "path": path})
 
     def _extract_text_content(self, html: str) -> str:
         """Extract visible text content from HTML, removing scripts, styles, and tags.
@@ -296,24 +340,27 @@ class BrowserbaseTools(Toolkit):
             connect_url (str, optional): The connection URL from an existing session
 
         Returns:
-            The page content (text-only if parse_html=True, otherwise raw HTML)
+            JSON string with page content (text-only if parse_html=True, otherwise raw HTML)
         """
         try:
             self._initialize_browser(connect_url)
             if not self._page:
-                return ""
+                return json.dumps({"status": "error", "message": "No page available"})
 
             raw_content = self._page.content()
+            url = self._page.url
+            title = self._page.title()
 
             if self.parse_html:
                 content = self._extract_text_content(raw_content)
             else:
                 content = raw_content
 
-            return self._truncate_content(content)
+            content = self._truncate_content(content)
+            return json.dumps({"status": "success", "url": url, "title": title, "content": content})
         except Exception as e:
             self._cleanup()
-            raise e
+            return json.dumps({"status": "error", "message": str(e)})
 
     def close_session(self) -> str:
         """Closes a browser session.
@@ -352,7 +399,7 @@ class BrowserbaseTools(Toolkit):
             return json.dumps({"status": "success", "selector": selector})
         except Exception as e:
             self._cleanup()
-            raise e
+            return json.dumps({"status": "error", "message": str(e), "selector": selector})
 
     def type_text(self, selector: str, text: str, connect_url: Optional[str] = None) -> str:
         """Types text into an input element.
@@ -372,7 +419,7 @@ class BrowserbaseTools(Toolkit):
             return json.dumps({"status": "success", "selector": selector, "text_length": len(text)})
         except Exception as e:
             self._cleanup()
-            raise e
+            return json.dumps({"status": "error", "message": str(e), "selector": selector})
 
     def get_element_text(self, selector: str, connect_url: Optional[str] = None) -> str:
         """Gets text content of a specific element.
@@ -382,18 +429,19 @@ class BrowserbaseTools(Toolkit):
             connect_url (str, optional): The connection URL from an existing session
 
         Returns:
-            The text content of the element
+            JSON string with the text content or error
         """
         try:
             self._initialize_browser(connect_url)
             if self._page:
                 element = self._page.query_selector(selector)
                 if element:
-                    return element.inner_text()
-            return ""
+                    text = element.inner_text()
+                    return json.dumps({"status": "success", "text": text, "selector": selector})
+            return json.dumps({"status": "error", "message": f"Element not found: {selector}"})
         except Exception as e:
             self._cleanup()
-            raise e
+            return json.dumps({"status": "error", "message": str(e)})
 
     def fill_form(self, form_data: Dict[str, str], connect_url: Optional[str] = None) -> str:
         """Fills multiple form fields at once.
@@ -407,7 +455,7 @@ class BrowserbaseTools(Toolkit):
         """
         try:
             self._initialize_browser(connect_url)
-            filled = []
+            filled: List[str] = []
             if self._page:
                 for selector, value in form_data.items():
                     self._page.fill(selector, value)
@@ -415,7 +463,7 @@ class BrowserbaseTools(Toolkit):
             return json.dumps({"status": "success", "filled_fields": filled})
         except Exception as e:
             self._cleanup()
-            raise e
+            return json.dumps({"status": "error", "message": str(e)})
 
     def wait_for_selector(self, selector: str, timeout: int = 30000, connect_url: Optional[str] = None) -> str:
         """Waits for an element to appear on the page.
@@ -435,7 +483,7 @@ class BrowserbaseTools(Toolkit):
             return json.dumps({"status": "success", "selector": selector})
         except Exception as e:
             self._cleanup()
-            raise e
+            return json.dumps({"status": "error", "message": str(e), "selector": selector})
 
     def get_session_recording(self) -> str:
         """Gets the recording URL for the current session.
@@ -502,11 +550,11 @@ class BrowserbaseTools(Toolkit):
             if self._async_page:
                 await self._async_page.goto(url, wait_until="networkidle")
             title = await self._async_page.title() if self._async_page else ""
-            result = {"status": "complete", "title": title, "url": url}
+            result = {"status": "success", "title": title, "url": url}
             return json.dumps(result)
         except Exception as e:
             await self._acleanup()
-            raise e
+            return json.dumps({"status": "error", "message": str(e), "url": url})
 
     async def ascreenshot(self, path: str, full_page: bool = True, connect_url: Optional[str] = None) -> str:
         """Takes a screenshot of the current page asynchronously.
@@ -526,7 +574,7 @@ class BrowserbaseTools(Toolkit):
             return json.dumps({"status": "success", "path": path})
         except Exception as e:
             await self._acleanup()
-            raise e
+            return json.dumps({"status": "error", "message": str(e), "path": path})
 
     async def aget_page_content(self, connect_url: Optional[str] = None) -> str:
         """Gets the content of the current page asynchronously.
@@ -535,24 +583,27 @@ class BrowserbaseTools(Toolkit):
             connect_url (str, optional): The connection URL from an existing session
 
         Returns:
-            The page content (text-only if parse_html=True, otherwise raw HTML)
+            JSON string with page content (text-only if parse_html=True, otherwise raw HTML)
         """
         try:
             await self._ainitialize_browser(connect_url)
             if not self._async_page:
-                return ""
+                return json.dumps({"status": "error", "message": "No page available"})
 
             raw_content = await self._async_page.content()
+            url = self._async_page.url
+            title = await self._async_page.title()
 
             if self.parse_html:
                 content = self._extract_text_content(raw_content)
             else:
                 content = raw_content
 
-            return self._truncate_content(content)
+            content = self._truncate_content(content)
+            return json.dumps({"status": "success", "url": url, "title": title, "content": content})
         except Exception as e:
             await self._acleanup()
-            raise e
+            return json.dumps({"status": "error", "message": str(e)})
 
     async def aclose_session(self) -> str:
         """Closes a browser session asynchronously.
@@ -591,7 +642,7 @@ class BrowserbaseTools(Toolkit):
             return json.dumps({"status": "success", "selector": selector})
         except Exception as e:
             await self._acleanup()
-            raise e
+            return json.dumps({"status": "error", "message": str(e), "selector": selector})
 
     async def atype_text(self, selector: str, text: str, connect_url: Optional[str] = None) -> str:
         """Types text into an input element asynchronously.
@@ -611,7 +662,7 @@ class BrowserbaseTools(Toolkit):
             return json.dumps({"status": "success", "selector": selector, "text_length": len(text)})
         except Exception as e:
             await self._acleanup()
-            raise e
+            return json.dumps({"status": "error", "message": str(e), "selector": selector})
 
     async def aget_element_text(self, selector: str, connect_url: Optional[str] = None) -> str:
         """Gets text content of a specific element asynchronously.
@@ -621,18 +672,19 @@ class BrowserbaseTools(Toolkit):
             connect_url (str, optional): The connection URL from an existing session
 
         Returns:
-            The text content of the element
+            JSON string with the text content or error
         """
         try:
             await self._ainitialize_browser(connect_url)
             if self._async_page:
                 element = await self._async_page.query_selector(selector)
                 if element:
-                    return await element.inner_text()
-            return ""
+                    text = await element.inner_text()
+                    return json.dumps({"status": "success", "text": text, "selector": selector})
+            return json.dumps({"status": "error", "message": f"Element not found: {selector}"})
         except Exception as e:
             await self._acleanup()
-            raise e
+            return json.dumps({"status": "error", "message": str(e)})
 
     async def afill_form(self, form_data: Dict[str, str], connect_url: Optional[str] = None) -> str:
         """Fills multiple form fields at once asynchronously.
@@ -646,7 +698,7 @@ class BrowserbaseTools(Toolkit):
         """
         try:
             await self._ainitialize_browser(connect_url)
-            filled = []
+            filled: List[str] = []
             if self._async_page:
                 for selector, value in form_data.items():
                     await self._async_page.fill(selector, value)
@@ -654,7 +706,7 @@ class BrowserbaseTools(Toolkit):
             return json.dumps({"status": "success", "filled_fields": filled})
         except Exception as e:
             await self._acleanup()
-            raise e
+            return json.dumps({"status": "error", "message": str(e)})
 
     async def await_for_selector(self, selector: str, timeout: int = 30000, connect_url: Optional[str] = None) -> str:
         """Waits for an element to appear on the page asynchronously.
@@ -674,7 +726,7 @@ class BrowserbaseTools(Toolkit):
             return json.dumps({"status": "success", "selector": selector})
         except Exception as e:
             await self._acleanup()
-            raise e
+            return json.dumps({"status": "error", "message": str(e), "selector": selector})
 
     async def aget_session_recording(self) -> str:
         """Gets the recording URL for the current session asynchronously.
